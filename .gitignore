@@ -49,6 +49,14 @@ outputs/logs/*
 # Logs
 *.log
 
+# LangSmith
+.langsmith/
+
+# Vector indices
+data/index/
+*.faiss
+*.pkl
+
 # IDE
 .vscode/
 .idea/

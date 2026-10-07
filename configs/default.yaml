@@ -1,0 +1,34 @@
+# Paper Correlation Pipeline Configuration
+
+# RAG parameters
+top_k: 10  # Number of papers to retrieve
+chunks_per_paper: 5  # Number of relevant chunks to retrieve per paper
+chunk_size: 512  # Tokens per chunk
+chunk_overlap: 64  # Token overlap between chunks
+similarity_threshold: 0.5  # Minimum cosine similarity to include in candidate pairs
+
+# Pair analysis
+max_pairs: 50  # Maximum candidate pairs to analyze
+relation_types:
+  - same_problem  # Address the same research problem
+  - same_method  # Use the same method or approach
+  - builds_on  # One builds on findings from the other
+  - contradicts  # Results or claims contradict
+  - shared_dataset  # Use the same dataset
+  - unrelated  # No correlation found
+
+# LLM parameters
+model: "gpt-4-turbo"  # Model name
+temperature: 0.7  # Sampling temperature
+max_tokens: 500  # Max output tokens
+
+# Embedding model
+embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+
+# Paths
+data_path: "./data"
+output_path: "./outputs"
+index_path: "./data/index"
+
+# LangSmith tracing
+langsmith_project: "llm-project-paper-correlations"
