@@ -1,0 +1,4 @@
+[
+  {"paper_id":"synthetic-a","chunk_id":"shared-id","title":"Synthetic fixture A (not a real study)","authors":["Test Author"],"text":"SYNTHETIC TEST DATA: An observational cohort found no association between coffee consumption and cardiovascular disease. Confounding remains possible.","page_number":2,"score":0.9,"metadata":{"synthetic":true}},
+  {"paper_id":"synthetic-b","chunk_id":"shared-id","title":"Synthetic fixture B (not a real study)","authors":["Test Author"],"text":"SYNTHETIC TEST DATA: An observational cohort reported an association between coffee intake and cardiovascular disease, without establishing causation.","page_number":3,"score":0.8,"metadata":{"synthetic":true}}
+]
