@@ -4,3 +4,4 @@ transformers
 datasets
 tqdm
 jupyter
+-e .[test]
