@@ -8,6 +8,10 @@ dependencies = [
     "langgraph>=1,<2",
     "langchain-core>=1,<2",
     "langchain-ollama>=1,<2",
+    "pypdf>=4,<5",
+    "sentence-transformers>=3,<4",
+    "faiss-cpu>=1.7,<2",
+    "numpy>=1.24,<2",
 ]
 
 [project.optional-dependencies]

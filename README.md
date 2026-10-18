@@ -135,3 +135,80 @@ metadata is constructed from input records, not model output. Stances are
 `low`, `moderate`, or `high`. Confidence is a model judgment, not a calibrated
 probability. Citation checks validate source identity and provenance, not whether
 the source semantically proves every generated statement.
+
+## RAG Pipeline (NEW)
+
+The RAG pipeline enables ingesting documents and dynamically retrieving relevant evidence for claim verification.
+
+### Components
+
+- `src/app/rag/collect_papers.py` - Fetch papers from Semantic Scholar API
+- `src/app/rag/extract_documents.py` - Parse PDFs to text
+- `src/app/rag/chunk_documents.py` - Split documents into chunks
+- `src/app/rag/embeddings.py` - Generate embeddings using sentence-transformers
+- `src/app/rag/vector_store.py` - Store/retrieve vectors using FAISS
+- `src/app/rag/ingest.py` - Orchestrate ingestion pipeline
+- `src/app/rag/retriever.py` - Query vector store for relevant chunks
+- `src/app/graph/nodes/rag.py` - LangGraph node for RAG retrieval
+
+### Ingest Papers from Semantic Scholar API
+
+```bash
+claim-demo ingest-api \
+  --query "vitamin C common cold" \
+  --output vector_db_papers \
+  --limit 20
+```
+
+### Ingest PDFs
+
+```bash
+claim-demo ingest-pdf \
+  --input data/pdfs/ \
+  --output vector_db_pdfs \
+  --strategy paragraph
+```
+
+### Verify with RAG Retrieval
+
+Automatically retrieve relevant evidence and verify:
+
+```bash
+claim-demo rag-verify \
+  --claim "Vitamin C prevents the common cold" \
+  --vector-store vector_db_papers \
+  --output results.json \
+  --top-k 10
+```
+
+### Programmatic RAG Usage
+
+```python
+from app.rag.retriever import create_retriever
+from app.graph.workflow import verify_claim
+
+retriever = create_retriever("vector_db_papers")
+result = verify_claim(
+    claim="Vitamin C prevents cold",
+    retrieved_chunks=[],
+    retriever=retriever,
+    max_workers=3
+)
+print(result.model_dump_json(indent=2))
+```
+
+### Configuration
+
+Environment variables:
+
+- `SEMANTIC_SCHOLAR_API_KEY` - (Optional) API key for Semantic Scholar
+- `OLLAMA_MODEL` - (Default: `frob/qwen3.5-instruct:9b`)
+- `OLLAMA_BASE_URL` - (Default: `http://localhost:11434`)
+
+### Dependencies
+
+RAG pipeline requires:
+
+```bash
+pip install pypdf>=4 sentence-transformers>=3 faiss-cpu>=1.7
+```
