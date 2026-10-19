@@ -19,7 +19,7 @@ class RAGRetriever:
         embedding_model_obj = embedding_model
         self.embedding_model = embedding_model_obj
     
-    def retrieve(self, query: str, k: int = 5) -> list[RetrievedChunk]:
+    def retrieve(self, query: str, k: int = 4) -> list[RetrievedChunk]:
         """Retrieve top-k chunks for a query.
         
         Args:
@@ -47,7 +47,7 @@ class RAGRetriever:
                 year=metadata.get("year"),
                 page_number=metadata.get("page_number"),
                 score=score,
-                metadata=metadata
+                metadata=dict(metadata.get("metadata") or {})
             )
             chunks.append(chunk)
         
@@ -55,7 +55,8 @@ class RAGRetriever:
 
 
 def create_retriever(vector_store_path: str | None = None, 
-                     embedding_model_name: str = "all-MiniLM-L6-v2") -> RAGRetriever:
+                     embedding_model_name: str = "all-MiniLM-L6-v2", *,
+                     embedding_model: EmbeddingModel | None = None) -> RAGRetriever:
     """Create a RAG retriever from a vector store.
     
     Args:
@@ -65,7 +66,8 @@ def create_retriever(vector_store_path: str | None = None,
     Returns:
         RAGRetriever instance
     """
-    embedding_model = EmbeddingModel(embedding_model_name)
+    if embedding_model is None:
+        embedding_model = EmbeddingModel(embedding_model_name)
     vector_store = VectorStore(embedding_dim=embedding_model.embedding_dim)
     
     if vector_store_path:

@@ -1,68 +1,77 @@
-# RAG implementation handoff
+# Backend paper ingestion and retrieval
 
-The Python files in this folder and `../graph/nodes/rag.py` are intentionally
-empty placeholders for the colleague implementing upstream RAG. No RAG behavior
-is implemented or connected to the existing graph yet.
+Semantic Scholar search returns bibliographic metadata, abstracts, and an optional
+`openAccessPdf.url`; it does not return the PDF body. `ingest-api` follows that
+link (or the official arXiv PDF when an arXiv ID is available but no PDF link is
+provided), checks the response bytes for a PDF header, and extracts its text. Neither
+`isOpenAccess` nor a URL by itself counts as verified readable evidence.
 
-## File responsibilities
+Each searched paper is recorded in `ingestion_report.json`, including its PDF URL,
+resolved URL when available, document format, extraction status, page counts,
+empty pages, evidence type, and chunk count. Statuses distinguish missing links,
+failed downloads, non-PDF responses, invalid PDFs, PDFs without extractable text,
+and PDFs with text. Missing or failed links do not prove full text is unavailable
+elsewhere. HTML landing pages are reported but are not scraped as paper evidence.
+Downloads have a 30-second timeout and a 30 MiB size limit.
 
-| File | Intended responsibility |
-| --- | --- |
-| `collect_papers.py` | Collect paper metadata and available documents. Reuse or refactor the existing Semantic Scholar retrieval script rather than duplicate it. |
-| `extract_documents.py` | Extract text from collected documents, preserving page numbers and source metadata. |
-| `chunk_documents.py` | Split extracted text into chunks with stable paper and chunk IDs and page/section provenance. |
-| `embeddings.py` | Generate document and query embeddings using the same model and configuration. |
-| `vector_store.py` | Store and search embeddings together with original chunk text and metadata; support repeat ingestion without duplicate records. |
-| `ingest.py` | Coordinate the offline collection, extraction, chunking, embedding, and storage flow. |
-| `retriever.py` | Accept a claim, embed the query, search the store, and return retrieved chunk records. |
-| `../graph/nodes/rag.py` | Adapt retrieval to graph state: read `claim`, produce `retrieved_chunks`, and eventually connect before `group_papers`. |
-| `__init__.py` | Package marker; intentionally empty. |
+## Splitting and provenance
 
-## Planned flow
+- Default `--strategy paragraph`: one extracted paragraph per chunk, within a page.
+- `--strategy page`: one nonempty PDF page per chunk.
+- No character-size splitting, merging, or overlap in either ingestion strategy.
+- `page_number` is the 1-based physical PDF page, not a printed page label.
+- Blank pages produce no chunks but do not renumber subsequent pages.
+- Paragraph numbers restart at 1 per page; IDs are
+  `<paper_id>:page_<n>:paragraph_<m>` (or `<paper_id>:page_<n>` for page mode).
+- Paragraphs are inferred from blank lines in PyPDF layout extraction. If none
+  are detected, the entire page is one paragraph. Multicolumn layouts, tables,
+  headers, and footers can affect extraction order and boundaries.
+- Scanned/image-only PDFs need OCR, which is not implemented here.
+- Text, page numbers, paragraph numbers, and evidence type survive FAISS metadata
+  persistence, retrieval, grouping, and final source citations.
 
-Offline: collect papers → extract documents → chunk text → embed → store.
+API ingestion prefers extracted PDF evidence. If unavailable, it uses an explicitly
+labeled abstract with no page number. `--full-text-only` disables that fallback.
+If nothing is usable, ingestion raises an error after saving the report.
+The `fetch`/`verify --format abstracts` commands remain the legacy abstract route.
 
-Online: claim → RAG node → rank/group papers → parallel paper analysis →
-aggregate evidence and validate citations → structured response.
+## Run
 
-Ranking/grouping and every subsequent online step already exist. Reuse them.
-The current workflow still starts at grouping and accepts supplied chunks, so
-the demo and downstream tests can run independently of RAG development.
+Use Python 3.12 for the declared dependency set (including NumPy <2):
 
-## Integration contract
+```bash
+python3.12 -m venv .venv312
+.venv312/bin/python -m pip install -e '.[test]'
 
-Use `RetrievedChunk` from `app.llm.schemas`; do not introduce a competing chunk
-model at the downstream boundary.
+.venv312/bin/python -m app.demo ingest-api \
+  --query "your research topic" --limit 5 \
+  --strategy paragraph --output vector_db_papers
 
-- Required fields: `paper_id`, `chunk_id`, `text`, and `title`.
-- Optional fields: `authors`, `doi`, `url`, `year`, `page_number`, `score`, and
-  the `metadata` dictionary for additional provenance.
-- Preserve exact excerpt text and stable IDs. Chunk IDs are unique within a
-  paper; paper IDs identify the same paper across retrieval results.
-- Keep bibliographic metadata consistent across chunks from the same paper.
-- A PDF URL without extracted text is not an evidence chunk. Identify abstract
-  evidence with `metadata.evidence_type = "abstract"`.
-- Document score direction. Existing grouping defaults to higher scores first;
-  configure `higher_score_better=False` if returning distances. Missing scores
-  are supported and preserve relative retrieval order.
-- Populate `evidence_cutoff` only when the corpus has a known coverage cutoff;
-  a retrieval timestamp is not an evidence cutoff.
+.venv312/bin/python -m app.demo ingest-pdf \
+  --input /path/to/pdfs --strategy paragraph --output vector_db_local
 
-Until graph integration is ready, pass retrieval results to the existing
-`verify_claim(claim, retrieved_chunks, ...)` entry point in
-`app.graph.workflow`. Later, connect the RAG node between START and
-`group_papers`, preserving a way to supply chunks directly for tests.
+.venv312/bin/python -m app.demo rag-verify \
+  --claim "Your claim" --vector-store vector_db_papers \
+  --output /tmp/paper-verdict.json --top-k 10
 
-## Existing functionality to consult
+.venv312/bin/python -m pytest \
+  tests/test_rag.py tests/test_pipeline.py tests/test_fulltext_pipeline.py -v
+```
 
-- `scripts/Semantic Scholar retrieval.py`: existing paper search and metadata mapping.
-- `scripts/relevance_filter.py`: existing experimental paper relevance scoring.
-- `app.demo`: one-request Semantic Scholar fetch and cached abstract adapter.
-- `app.llm.schemas`: shared evidence and final response models.
-- `app.graph.nodes.group_papers`: existing ranking, deduplication, and grouping.
-- `tests/test_pipeline.py`: downstream contract and behavior tests.
+Set `SEMANTIC_SCHOLAR_API_KEY` if available. API rate limits can still prevent a
+live search; transient HTTP errors have bounded retries. Verification requires
+Ollama; unit/integration workflow tests use a fake LLM. The embedding test uses
+MiniLM and may download its weights. Exclude it with `-k 'not test_embedding_model'`
+for tests without model downloads. No UI tests are included in `tests/`.
 
-The colleague should add tests for extraction provenance, stable chunk IDs,
-embedding/store compatibility, repeat ingestion, empty retrieval, and the
-retriever-to-grouping contract when implementing these components. No provider,
-embedding model, database, or new dependency has been selected by this scaffold.
+Ingestion builds a new index at its output path; use a fresh directory for a new
+corpus. Existing indexes must be rebuilt to obtain page-aware chunks. Retrieval
+selects chunks, not complete papers; the downstream paper/chunk/context budgets
+still apply. MiniLM has a finite token window, so long paragraphs/pages may be
+truncated for embedding even though the stored text remains intact.
+
+On the tested macOS environment, initializing FAISS before importing PyTorch can
+abort with a duplicate OpenMP runtime error. The explicit test order above loads
+the embedding model first, as the production ingestion/retriever constructors do.
+Alternatively, run the embedding test and the remaining tests in separate Python
+processes. Do not suppress the runtime error with `KMP_DUPLICATE_LIB_OK`.

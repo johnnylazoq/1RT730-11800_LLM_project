@@ -25,6 +25,6 @@ def retrieve_evidence(state: GraphState, retriever: RAGRetriever | None = None) 
         return {"retrieved_chunks": state.get("retrieved_chunks", [])}
     
     print(f"Retrieving evidence for: {claim}")
-    chunks = retriever.retrieve(claim, k=10)
+    chunks = retriever.retrieve(claim, k=4)
     
     return {"retrieved_chunks": [chunk.model_dump() for chunk in chunks]}

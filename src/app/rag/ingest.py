@@ -1,9 +1,9 @@
 """Orchestrate the complete RAG pipeline: collect, extract, chunk, embed, store."""
 import json
 from pathlib import Path
-from app.rag.collect_papers import fetch_papers, papers_to_chunks
-from app.rag.extract_documents import extract_text_from_pdf, extract_from_multiple_pdfs
-from app.rag.chunk_documents import chunk_text, chunk_by_paragraphs, TextChunk
+from app.rag.collect_papers import fetch_papers, resolve_paper
+from app.rag.extract_documents import extract_pages_from_pdf
+from app.rag.chunk_documents import chunk_pages, TextChunk
 from app.rag.embeddings import EmbeddingModel
 from app.rag.vector_store import VectorStore
 from app.llm.schemas import RetrievedChunk
@@ -12,7 +12,9 @@ from app.llm.schemas import RetrievedChunk
 def ingest_papers_from_api(query: str, 
                           vector_store_path: str = "vector_db",
                           embedding_model_name: str = "all-MiniLM-L6-v2",
-                          limit: int = 10) -> VectorStore:
+                          limit: int = 10,
+                          chunk_strategy: str = "paragraph",
+                          abstract_fallback: bool = True) -> VectorStore:
     """Ingest papers from Semantic Scholar API into vector store.
     
     Args:
@@ -26,8 +28,17 @@ def ingest_papers_from_api(query: str,
     """
     print(f"Fetching papers for: {query}")
     papers = fetch_papers(query, limit=limit)
-    chunks = papers_to_chunks(papers)
-    
+    chunks, reports = [], []
+    for paper in papers:
+        evidence, report = resolve_paper(paper, strategy=chunk_strategy,
+                                         abstract_fallback=abstract_fallback)
+        chunks.extend(evidence)
+        reports.append(report)
+        print(f"{report['paper_id']}: {report['full_text_status']} ({len(evidence)} chunks)")
+    destination = Path(vector_store_path)
+    destination.mkdir(parents=True, exist_ok=True)
+    (destination / "ingestion_report.json").write_text(
+        json.dumps(reports, indent=2), encoding="utf-8")
     return ingest_chunks(chunks, vector_store_path, embedding_model_name)
 
 
@@ -41,30 +52,30 @@ def ingest_pdfs(pdf_dir: str,
         pdf_dir: Directory containing PDFs
         vector_store_path: Path to save vector store
         embedding_model_name: Embedding model name
-        chunk_strategy: "paragraph" or "fixed"
+        chunk_strategy: "paragraph" or "page"
         
     Returns:
         Populated VectorStore
     """
-    print(f"Extracting PDFs from: {pdf_dir}")
-    pdf_texts = extract_from_multiple_pdfs(pdf_dir)
-    
+    if chunk_strategy not in {"paragraph", "page"}:
+        raise ValueError("chunk_strategy must be 'paragraph' or 'page'")
+    directory = Path(pdf_dir)
+    if not directory.is_dir():
+        raise NotADirectoryError(pdf_dir)
     text_chunks = []
-    for filename, text in pdf_texts.items():
-        if chunk_strategy == "paragraph":
-            chunks = chunk_by_paragraphs(text, source=filename, max_chunk_size=2000)
-        else:
-            chunks = chunk_text(text, source=filename, chunk_size=1000, overlap=100)
-        
-        text_chunks.extend(chunks)
-    
-    retrieved_chunks = _text_chunks_to_retrieved(text_chunks)
-    return ingest_chunks(retrieved_chunks, vector_store_path, embedding_model_name)
+    for path in sorted(directory.iterdir()):
+        if path.suffix.lower() != ".pdf":
+            continue
+        pages = extract_pages_from_pdf(path)
+        text_chunks.extend(chunk_pages(pages, path.name, chunk_strategy))
+    return ingest_chunks(_text_chunks_to_retrieved(text_chunks),
+                         vector_store_path, embedding_model_name)
 
 
 def ingest_chunks(chunks: list[RetrievedChunk],
                  vector_store_path: str = "vector_db",
-                 embedding_model_name: str = "all-MiniLM-L6-v2") -> VectorStore:
+                 embedding_model_name: str = "all-MiniLM-L6-v2", *,
+                 embedding_model: EmbeddingModel | None = None) -> VectorStore:
     """Ingest RetrievedChunk objects into vector store.
     
     Args:
@@ -80,7 +91,8 @@ def ingest_chunks(chunks: list[RetrievedChunk],
     
     print(f"Ingesting {len(chunks)} chunks")
     
-    embedding_model = EmbeddingModel(embedding_model_name)
+    if embedding_model is None:
+        embedding_model = EmbeddingModel(embedding_model_name)
     vector_store = VectorStore(embedding_dim=embedding_model.embedding_dim)
     
     texts = [chunk.text for chunk in chunks]
@@ -131,8 +143,7 @@ def _text_chunks_to_retrieved(text_chunks: list[TextChunk]) -> list[RetrievedChu
             metadata={
                 "evidence_type": "pdf_chunk",
                 "provider": "local_pdf",
-                "start_char": tc.start_char,
-                "end_char": tc.end_char
+                "paragraph_number": tc.paragraph_number
             }
         )
         chunks.append(chunk)
