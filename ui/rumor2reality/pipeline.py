@@ -79,10 +79,10 @@ def pipeline_events(claim, top_k=4, model_name=DEFAULT_MODEL,
             "study_type": entry.study_design, "page": source.page_number or "Unknown",
             "section": source.metadata.get("evidence_type", "Evidence excerpt"), "snippet": source.excerpt})
     yield "done", {
-        "claim": claim, "verdict": {"label": label, "tone": tone, "rationale": result.confidence_reason},
+        "claim": claim, "verdict": {"label": label, "tone": tone},
         "confidence": {"label": result.confidence.title(), "rationale": result.confidence_reason},
         "evidence_summary": [f"{item.statement} [{', '.join(item.citation_ids)}]" for item in result.evidence_summary],
-        "limitations": result.limitations, "answer": "### Assessment\n\n" + result.confidence_reason,
+        "limitations": result.limitations, "answer": "",
         "sources": sources, "timings": timings,
         "metadata": {"model": model_name, "papers_available": available, "top_k": top_k,
                      "pipeline_mode": evidence_source, "retrieved_chunks": len(selected)},

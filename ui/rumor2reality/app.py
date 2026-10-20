@@ -32,6 +32,16 @@ def _empty_sources_html() -> str:
     """
 
 
+def _study_type_label(value: str) -> str:
+    """Keep the first descriptive phrase without inferring a study design."""
+    label = re.split(r"[(;\n]|\.\s", value.strip(), maxsplit=1)[0].strip()
+    if not label or label.lower() == "unknown":
+        return "Study type unspecified"
+    if len(label) > 48:
+        label = label[:45].rsplit(" ", 1)[0].rstrip(" ,;:") + "..."
+    return label[0].upper() + label[1:]
+
+
 def _sources_cards_html(sources: list[dict[str, Any]]) -> str:
     if not sources:
         return _empty_sources_html()
@@ -47,7 +57,9 @@ def _sources_cards_html(sources: list[dict[str, Any]]) -> str:
         raw_url = str(source.get("url") or "")
         url = html.escape(raw_url, quote=True) if urlsplit(raw_url).scheme in {"http", "https"} else ""
         stance = html.escape(str(source.get("stance", "Background")))
-        study_type = html.escape(str(source.get("study_type", "Paper")))
+        study_detail = str(source.get("study_type") or "Unknown")
+        study_type = html.escape(_study_type_label(study_detail))
+        study_title = html.escape(study_detail, quote=True)
         page = html.escape(str(source.get("page", "?")))
         section = html.escape(str(source.get("section", "Unknown section")))
         snippet = html.escape(str(source.get("snippet", "")))
@@ -61,7 +73,7 @@ def _sources_cards_html(sources: list[dict[str, Any]]) -> str:
               <h3>{title} <span>({year})</span></h3>
               <div class="r2r-source-meta">
                 <span>{stance}</span>
-                <span>{study_type}</span>
+                <span title="{study_title}">{study_type}</span>
                 <span>p. {page}</span>
               </div>
               <p>{reason}</p>
@@ -148,11 +160,12 @@ def _answer_html(
     if verdict:
         label = html.escape(verdict.get("label", "Not enough evidence"))
         rationale = html.escape(verdict.get("rationale", ""))
+        rationale_html = f"<small>{rationale}</small>" if rationale else ""
         verdict_tone = html.escape(verdict.get("tone", "caution"))
         verdict_html = f"""
         <div class="r2r-verdict r2r-verdict-{verdict_tone}">
           <span>{label}</span>
-          <small>{rationale}</small>
+          {rationale_html}
         </div>
         """
 
