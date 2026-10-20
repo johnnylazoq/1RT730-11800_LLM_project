@@ -7,7 +7,8 @@ from typing import Any
 
 import gradio as gr
 
-from pipeline import run_pipeline
+from pipeline import DEFAULT_MODEL, pipeline_events
+from urllib.parse import urlsplit
 
 
 DEFAULT_CLAIM = "A viral post says that most online rumors are created by bots."
@@ -31,6 +32,16 @@ def _empty_sources_html() -> str:
     """
 
 
+def _study_type_label(value: str) -> str:
+    """Keep the first descriptive phrase without inferring a study design."""
+    label = re.split(r"[(;\n]|\.\s", value.strip(), maxsplit=1)[0].strip()
+    if not label or label.lower() == "unknown":
+        return "Study type unspecified"
+    if len(label) > 48:
+        label = label[:45].rsplit(" ", 1)[0].rstrip(" ,;:") + "..."
+    return label[0].upper() + label[1:]
+
+
 def _sources_cards_html(sources: list[dict[str, Any]]) -> str:
     if not sources:
         return _empty_sources_html()
@@ -40,12 +51,20 @@ def _sources_cards_html(sources: list[dict[str, Any]]) -> str:
         rank = html.escape(str(source["rank"]))
         title = html.escape(str(source["title"]))
         year = html.escape(str(source["year"]))
-        relevance = int(float(source["relevance"]) * 100)
+        score = source.get("relevance")
+        relevance = f"Similarity: {float(score):.3f}" if score is not None else "Similarity unavailable"
         reason = html.escape(str(source["why_selected"]))
-        url = html.escape(str(source["url"]))
+        raw_url = str(source.get("url") or "")
+        url = html.escape(raw_url, quote=True) if urlsplit(raw_url).scheme in {"http", "https"} else ""
         stance = html.escape(str(source.get("stance", "Background")))
-        study_type = html.escape(str(source.get("study_type", "Paper")))
-        page = html.escape(str(source.get("page", "?")))
+        study_detail = str(source.get("study_type") or "Unknown")
+        study_type = html.escape(_study_type_label(study_detail))
+        study_title = html.escape(study_detail, quote=True)
+        page = str(source.get("page") or "").strip()
+        page_html = (
+            f"<span>p. {html.escape(page)}</span>"
+            if page.lower() not in {"", "?", "unknown", "none", "n/a"} else ""
+        )
         section = html.escape(str(source.get("section", "Unknown section")))
         snippet = html.escape(str(source.get("snippet", "")))
         cards.append(
@@ -53,16 +72,19 @@ def _sources_cards_html(sources: list[dict[str, Any]]) -> str:
             <article class="r2r-source-card">
               <div class="r2r-source-topline">
                 <span class="r2r-source-rank">#{rank}</span>
-                <span class="r2r-source-score">{relevance}% relevant</span>
+                <span class="r2r-source-score">{relevance}</span>
               </div>
               <h3>{title} <span>({year})</span></h3>
               <div class="r2r-source-meta">
                 <span>{stance}</span>
-                <span>{study_type}</span>
-                <span>p. {page}</span>
+                <span title="{study_title}">{study_type}</span>
+                {page_html}
               </div>
               <p>{reason}</p>
-              <blockquote>{snippet}</blockquote>
+              <details class="r2r-evidence-excerpt">
+                <summary>Show evidence excerpt</summary>
+                <blockquote>{snippet}</blockquote>
+              </details>
               <a href="{url}" target="_blank" rel="noreferrer">Open source - {section}</a>
             </article>
             """
@@ -145,11 +167,12 @@ def _answer_html(
     if verdict:
         label = html.escape(verdict.get("label", "Not enough evidence"))
         rationale = html.escape(verdict.get("rationale", ""))
+        rationale_html = f"<small>{rationale}</small>" if rationale else ""
         verdict_tone = html.escape(verdict.get("tone", "caution"))
         verdict_html = f"""
         <div class="r2r-verdict r2r-verdict-{verdict_tone}">
           <span>{label}</span>
-          <small>{rationale}</small>
+          {rationale_html}
         </div>
         """
 
@@ -191,7 +214,7 @@ def _answer_html(
     )
 
 
-def analyse_claim(claim: str, top_k: int, model_name: str):
+def analyse_claim(claim: str, top_k: int, model_name: str, evidence_source="Semantic Scholar", vector_store_path=""):
     claim = (claim or "").strip()
     if not claim:
         yield (
@@ -203,45 +226,22 @@ def analyse_claim(claim: str, top_k: int, model_name: str):
         )
         return
 
-    yield (
-        _progress_html("scrape"),
-        _answer_html("### Checking evidence\n\nLoading or scraping candidate papers...", "working"),
-        _empty_sources_html(),
-        {"status": "loading papers"},
-        "",
-    )
-
-    yield (
-        _progress_html("retrieve"),
-        _answer_html("### Checking evidence\n\nRetrieving the most relevant papers for this claim...", "working"),
-        _empty_sources_html(),
-        {"status": "retrieving evidence"},
-        "",
-    )
-
-    yield (
-        _progress_html("generate"),
-        _answer_html("### Checking evidence\n\nGenerating a grounded response from the retrieved evidence...", "working"),
-        _empty_sources_html(),
-        {"status": "generating answer"},
-        "",
-    )
-
-    result = run_pipeline(claim=claim, top_k=int(top_k), model_name=model_name)
-    yield (
-        _progress_html("done"),
-        _answer_html(
-            result["answer"],
-            "done",
-            verdict=result["verdict"],
-            confidence=result["confidence"],
-            evidence_summary=result["evidence_summary"],
-            limitations=result["limitations"],
-        ),
-        _sources_cards_html(result["sources"]),
-        {"timings": result["timings"], "metadata": result["metadata"]},
-        _debug_json(result),
-    )
+    messages = {"scrape": "Loading candidate evidence...", "retrieve": "Embedding and retrieving evidence...",
+                "generate": "Analyzing papers and synthesizing cited findings..."}
+    try:
+        for stage, result in pipeline_events(claim, int(top_k), model_name, evidence_source, vector_store_path):
+            if stage != "done":
+                yield (_progress_html(stage), _answer_html("### Checking evidence\n\n" + messages[stage], "working"),
+                       _empty_sources_html(), {"status": messages[stage]}, "")
+            else:
+                yield (_progress_html("done"), _answer_html(result["answer"], "done",
+                       verdict=result["verdict"], confidence=result["confidence"],
+                       evidence_summary=result["evidence_summary"], limitations=result["limitations"]),
+                       _sources_cards_html(result["sources"]),
+                       {"timings": result["timings"], "metadata": result["metadata"]}, _debug_json(result))
+    except Exception as exc:
+        yield (_progress_html("ready"), _answer_html("### Check failed\n\n" + str(exc), "warning"),
+               _empty_sources_html(), {"status": "failed", "error_type": type(exc).__name__}, "")
 
 
 def clear_outputs():
@@ -570,6 +570,24 @@ CSS = """
     font-weight: 700;
     padding: 0.18rem 0.48rem;
 }
+.r2r-evidence-excerpt {
+    margin: 0 0 0.85rem;
+}
+.r2r-evidence-excerpt summary {
+    color: #334155;
+    cursor: pointer;
+    font-size: 0.88rem;
+    font-weight: 600;
+    padding: 0.25rem 0;
+}
+.r2r-evidence-excerpt summary:focus-visible {
+    outline: 2px solid #ea580c;
+    outline-offset: 3px;
+    border-radius: 3px;
+}
+.r2r-evidence-excerpt[open] summary {
+    margin-bottom: 0.6rem;
+}
 .r2r-source-card blockquote {
     border-left: 3px solid #fed7aa;
     color: #475569;
@@ -634,15 +652,15 @@ with gr.Blocks(
                     placeholder="Paste a rumor, viral claim, or challenge prompt...",
                 )
             with gr.Column(scale=2):
-                model_name = gr.Dropdown(
-                    label="Answer mode",
-                    choices=["starter-rag-baseline", "local-llm", "api-llm"],
-                    value="starter-rag-baseline",
-                )
+                model_name = gr.Textbox(label="Ollama model", value=DEFAULT_MODEL)
+                evidence_source = gr.Dropdown(label="Evidence source",
+                    choices=["Semantic Scholar", "Existing vector store"], value="Semantic Scholar")
+                vector_store_path = gr.Textbox(label="Existing vector store directory",
+                    placeholder="Absolute path to an ingested PDF or paper index")
                 top_k = gr.Slider(
-                    label="Number of papers",
+                    label="Evidence chunks to retrieve",
                     minimum=1,
-                    maximum=5,
+                    maximum=20,
                     value=4,
                     step=1,
                 )
@@ -660,7 +678,7 @@ with gr.Blocks(
         gr.Markdown('<p class="r2r-section-title">Retrieved evidence</p>')
         sources = gr.HTML(value=_empty_sources_html())
 
-        with gr.Accordion("Debug contract for backend integration", open=False):
+        with gr.Accordion("Full pipeline result", open=False):
             debug = gr.Code(label="Pipeline output", language="json")
 
         with gr.Accordion("Timing and metadata", open=False):
@@ -669,27 +687,27 @@ with gr.Blocks(
         with gr.Accordion("Example challenge prompts", open=False):
             gr.Examples(
                 examples=[
-                    [DEFAULT_CLAIM, 4, "starter-rag-baseline"],
-                    ["A thread claims that AI-generated misinformation spreads faster than human-written rumors.", 5, "starter-rag-baseline"],
-                    ["People say retrieval augmented generation always prevents hallucinations.", 3, "starter-rag-baseline"],
+                    [DEFAULT_CLAIM, 4, DEFAULT_MODEL],
+                    ["A thread claims that AI-generated misinformation spreads faster than human-written rumors.", 5, DEFAULT_MODEL],
+                    ["People say retrieval augmented generation always prevents hallucinations.", 3, DEFAULT_MODEL],
                 ],
                 inputs=[claim_input, top_k, model_name],
             )
 
     run_event = run_button.click(
         analyse_claim,
-        inputs=[claim_input, top_k, model_name],
+        inputs=[claim_input, top_k, model_name, evidence_source, vector_store_path],
         outputs=[progress, answer, sources, timing, debug],
     )
-    claim_input.submit(
+    submit_event = claim_input.submit(
         analyse_claim,
-        inputs=[claim_input, top_k, model_name],
+        inputs=[claim_input, top_k, model_name, evidence_source, vector_store_path],
         outputs=[progress, answer, sources, timing, debug],
     )
     clear_button.click(
         clear_outputs,
         outputs=[progress, answer, sources, timing, debug],
-        cancels=[run_event],
+        cancels=[run_event, submit_event],
     )
 
 

@@ -4,6 +4,12 @@
 
 ---
 
+## Web UI
+
+Install `pip install -e ".[ui,test]"` and launch `python ui/rumor2reality/app.py`.
+The UI connects paper discovery or an existing PDF/paper vector index to the
+LangGraph verification workflow and Ollama. See [UI setup](ui/rumor2reality/README.md).
+
 ## Table of Contents
 
 1. [Overview](#overview)
