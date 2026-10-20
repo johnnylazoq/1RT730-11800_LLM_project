@@ -60,7 +60,11 @@ def _sources_cards_html(sources: list[dict[str, Any]]) -> str:
         study_detail = str(source.get("study_type") or "Unknown")
         study_type = html.escape(_study_type_label(study_detail))
         study_title = html.escape(study_detail, quote=True)
-        page = html.escape(str(source.get("page", "?")))
+        page = str(source.get("page") or "").strip()
+        page_html = (
+            f"<span>p. {html.escape(page)}</span>"
+            if page.lower() not in {"", "?", "unknown", "none", "n/a"} else ""
+        )
         section = html.escape(str(source.get("section", "Unknown section")))
         snippet = html.escape(str(source.get("snippet", "")))
         cards.append(
@@ -74,10 +78,13 @@ def _sources_cards_html(sources: list[dict[str, Any]]) -> str:
               <div class="r2r-source-meta">
                 <span>{stance}</span>
                 <span title="{study_title}">{study_type}</span>
-                <span>p. {page}</span>
+                {page_html}
               </div>
               <p>{reason}</p>
-              <blockquote>{snippet}</blockquote>
+              <details class="r2r-evidence-excerpt">
+                <summary>Show evidence excerpt</summary>
+                <blockquote>{snippet}</blockquote>
+              </details>
               <a href="{url}" target="_blank" rel="noreferrer">Open source - {section}</a>
             </article>
             """
@@ -562,6 +569,24 @@ CSS = """
     font-size: 0.76rem;
     font-weight: 700;
     padding: 0.18rem 0.48rem;
+}
+.r2r-evidence-excerpt {
+    margin: 0 0 0.85rem;
+}
+.r2r-evidence-excerpt summary {
+    color: #334155;
+    cursor: pointer;
+    font-size: 0.88rem;
+    font-weight: 600;
+    padding: 0.25rem 0;
+}
+.r2r-evidence-excerpt summary:focus-visible {
+    outline: 2px solid #ea580c;
+    outline-offset: 3px;
+    border-radius: 3px;
+}
+.r2r-evidence-excerpt[open] summary {
+    margin-bottom: 0.6rem;
 }
 .r2r-source-card blockquote {
     border-left: 3px solid #fed7aa;
