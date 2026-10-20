@@ -47,7 +47,7 @@ class RAGRetriever:
                 year=metadata.get("year"),
                 page_number=metadata.get("page_number"),
                 score=score,
-                metadata=metadata
+                metadata=metadata.get("metadata", metadata)
             )
             chunks.append(chunk)
         
