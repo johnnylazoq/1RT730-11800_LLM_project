@@ -1,6 +1,10 @@
 """Fetch papers from Semantic Scholar API."""
 import os
 import json
+import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from app.llm.schemas import RetrievedChunk
@@ -26,8 +30,34 @@ def fetch_papers(query: str, limit: int = 10) -> list[dict]:
         headers["x-api-key"] = os.environ["SEMANTIC_SCHOLAR_API_KEY"]
     
     request = Request(f"https://api.semanticscholar.org/graph/v1/paper/search?{params}", headers=headers)
-    with urlopen(request, timeout=30) as response:
-        payload = json.load(response)
+    for attempt in range(3):
+        try:
+            with urlopen(request, timeout=30) as response:
+                payload = json.load(response)
+            break
+        except HTTPError as exc:
+            if exc.code != 429:
+                raise
+            retry_after = exc.headers.get("Retry-After") if exc.headers else None
+            exc.close()
+            delay = 5 * (2 ** attempt)
+            if retry_after:
+                try:
+                    delay = max(0, float(retry_after))
+                except ValueError:
+                    try:
+                        delay = max(0, (parsedate_to_datetime(retry_after) - datetime.now(timezone.utc)).total_seconds())
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+            # Do not retry earlier than the server allows or block the UI indefinitely.
+            if attempt == 2 or delay > 30:
+                raise RuntimeError(
+                    "Semantic Scholar is rate-limiting paper searches (HTTP 429). "
+                    "Try again later, set SEMANTIC_SCHOLAR_API_KEY before starting the app, "
+                    "or choose Existing vector store to use previously ingested papers/PDFs. "
+                    "The claim has not been assessed."
+                ) from exc
+            time.sleep(delay)
     
     papers = payload.get("data", [])
     return papers if isinstance(papers, list) else []
