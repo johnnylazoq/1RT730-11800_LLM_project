@@ -38,15 +38,18 @@ class FakeLLM:
                             {"statement": "A synthetic association was examined.",
                              "chunk_id": "invented" if self.bad_paper else paper["chunks"][0]["chunk_id"]}]}
             payload = json.loads(content)
-            return {"verdict": "mixed", "confidence": "low", "confidence_reason": "Synthetic test.",
-                    "evidence_summary": [{"statement": "Synthetic evidence is mixed.",
-                        "citation_ids": ["999"] if self.bad_aggregate else
-                            [s["citation_id"] for s in payload["sources"]]}]}
+            citations = ["999"] if self.bad_aggregate else [s["citation_id"] for s in payload["sources"]]
+            return {"verdict": "mixed", "confidence": "low",
+                    "evidence_summary": "Synthetic evidence is mixed. It does not establish causation.",
+                    "key_findings": [
+                        {"statement": "A synthetic association was examined.", "citation_ids": citations},
+                        {"statement": "The synthetic evidence does not establish causation.", "citation_ids": citations}],
+                    "limitations": ["Synthetic evidence only.", "Causal conclusions cannot be drawn."]}
         return SimpleNamespace(invoke=invoke)
 
 
 def test_end_to_end_preserves_provenance_and_parallel_execution(chunks):
-    result = verify_claim("Synthetic claim", chunks, llm=FakeLLM(barrier=threading.Barrier(2)), retries=0)
+    result = verify_claim("Synthetic claim", chunks, llm=FakeLLM(barrier=threading.Barrier(2)), retries=0, max_workers=2)
     assert result.verdict == "mixed"
     assert [s.citation_id for s in result.sources] == ["1", "2"]
     assert [s.paper_id for s in result.sources] == ["synthetic-a", "synthetic-b"]
@@ -153,3 +156,107 @@ def test_model_cannot_return_substantive_stance_without_evidence(chunks):
     paper = group_chunks(chunks)[0][0]
     with pytest.raises(ValueError, match="no cited evidence"):
         analyze_single_paper("claim", paper, llm=Unsupported())
+
+
+def test_compact_response_has_exact_fields_and_unique_papers(chunks):
+    result = verify_claim('claim', chunks, llm=FakeLLM())
+    # Two citations from one paper must not create duplicate paper listings.
+    result.sources.append(result.sources[0].model_copy(update={'citation_id': '3', 'chunk_id': 'other'}))
+    public = result.public_result()
+    assert set(public) == {'verdict', 'confidence', 'evidence_summary', 'key_findings', 'limitations', 'sources'}
+    assert public['verdict'] == 'Mixed'
+    assert public['confidence'] == 'Low'
+    assert isinstance(public['evidence_summary'], str)
+    assert 2 <= len(public['key_findings']) <= 3
+    assert 2 <= len(public['limitations']) <= 3
+    assert len(public['sources']) == 2
+    assert all(set(source) == {'title', 'url'} for source in public['sources'])
+    assert 'analyses' not in public and 'evidence' not in public
+
+
+def test_no_evidence_public_response_does_not_invent_findings():
+    public = verify_claim('claim', [], llm=object()).public_result()
+    assert public['verdict'] == 'Insufficient Evidence'
+    assert public['key_findings'] == []
+    assert public['sources'] == []
+    assert len(public['limitations']) == 2
+
+
+def test_aggregation_receives_all_individual_analyses(chunks):
+    class InspectingLLM(FakeLLM):
+        seen = None
+
+        def with_structured_output(self, schema, **kwargs):
+            delegate = super().with_structured_output(schema, **kwargs)
+            def invoke(messages):
+                if schema is not PaperAssessment:
+                    self.seen = json.loads(messages[1].content)
+                return delegate.invoke(messages)
+            return SimpleNamespace(invoke=invoke)
+
+    llm = InspectingLLM()
+    verify_claim('claim', chunks, llm=llm)
+    assert {a['paper_id'] for a in llm.seen['analyses']} == {'synthetic-a', 'synthetic-b'}
+    assert llm.seen['unique_papers_analyzed'] == 2
+
+
+def test_response_time_is_measured_and_saved_separately(chunks, tmp_path, monkeypatch):
+    from app import reporting
+    result = verify_claim('claim', chunks, llm=FakeLLM())
+    monkeypatch.setattr(reporting, 'perf_counter', lambda: 112.345)
+    elapsed = reporting.write_response(result, tmp_path / 'result.json', 100.0)
+    assert elapsed == 12.345
+    assert json.loads((tmp_path / 'result.timing.json').read_text())['claim_to_response_seconds'] == 12.345
+    assert 'claim_to_response_seconds' not in json.loads((tmp_path / 'result.json').read_text())
+    assert 'analyses' in json.loads((tmp_path / 'result.diagnostics.json').read_text())
+
+
+def test_aggregate_retry_receives_validation_feedback(chunks):
+    class RetryAggregate(FakeLLM):
+        aggregate_calls = 0
+        feedback_seen = False
+
+        def with_structured_output(self, schema, **kwargs):
+            delegate = super().with_structured_output(schema, **kwargs)
+            def invoke(messages):
+                response = delegate.invoke(messages)
+                if schema is not PaperAssessment:
+                    self.aggregate_calls += 1
+                    if self.aggregate_calls == 1:
+                        response['key_findings'][0]['citation_ids'] = ['unknown']
+                    else:
+                        self.feedback_seen = 'Previous response failed validation' in messages[-1].content
+                        payload = json.loads(messages[1].content)
+                        assert all('chunk_id' not in finding
+                            for analysis in payload['analyses']
+                            for finding in analysis['assessment']['findings'])
+                return response
+            return SimpleNamespace(invoke=invoke)
+
+    llm = RetryAggregate()
+    result = verify_claim('claim', chunks, llm=llm, retries=1)
+    assert llm.aggregate_calls == 2
+    assert llm.feedback_seen
+    assert result.sources
+
+
+@pytest.mark.parametrize('field,value', [
+    ('verdict', 'neutral'),
+    ('key_findings', []),
+    ('limitations', ['Only one']),
+    ('limitations', ['a', 'b', 'c', 'd']),
+])
+def test_aggregate_rejects_invalid_public_contract(field, value):
+    from pydantic import ValidationError
+    from app.llm.schemas import AggregationAssessment
+    payload = {
+        'verdict': 'supports', 'confidence': 'low',
+        'evidence_summary': 'An association was observed. Causation remains uncertain.',
+        'key_findings': [
+            {'statement': 'First result.', 'citation_ids': ['1']},
+            {'statement': 'Second result.', 'citation_ids': ['1']}],
+        'limitations': ['Observational evidence.', 'Small sample.'],
+    }
+    payload[field] = value
+    with pytest.raises(ValidationError):
+        AggregationAssessment.model_validate(payload)

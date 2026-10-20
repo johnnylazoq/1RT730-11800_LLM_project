@@ -2,6 +2,13 @@
 
 **Automated scientific claim verification using RAG and LLMs**
 
+**Backend update:** API ingestion now verifies linked PDFs and stores paragraphs within
+physical PDF pages (or whole pages with `--strategy page`), retaining page numbers.
+Abstract fallback is explicitly labeled; `--full-text-only` disables it.
+See [the backend ingestion guide](src/app/rag/README.md) for current behavior,
+availability reports, limitations, and test commands. Older examples below may
+describe the previous character-based implementation.
+
 ---
 
 ## Web UI
@@ -175,7 +182,7 @@ claim-demo rag-verify \
 #### Step 3: View Results
 
 ```bash
-cat results.json | jq '.result.assessment'
+cat results.json | jq '.result'
 ```
 
 **Output:**
@@ -471,7 +478,7 @@ Extract PDFs and build vector store.
 claim-demo ingest-pdf \
   --input PDF_DIRECTORY \
   --output OUTPUT_DIR \
-  --strategy {paragraph,fixed}
+  --strategy {paragraph,page}
 ```
 
 **Arguments:**
@@ -479,7 +486,7 @@ claim-demo ingest-pdf \
 - `--output`: Vector store directory (default: `vector_db`)
 - `--strategy`: Chunking strategy (default: `paragraph`)
   - `paragraph`: Preserves semantic boundaries
-  - `fixed`: Fixed-size chunks with overlap
+  - `page`: One chunk per physical PDF page
 
 ### Verification Commands
 
@@ -887,3 +894,160 @@ For questions or issues, open an issue on the project repository.
 
 **Last Updated:** October 2026
 **Status:** ✅ Production Ready
+
+### Live pipeline test with local traces
+
+With `SEMANTIC_SCHOLAR_API_KEY` set in your shell and Ollama running, execute:
+
+```bash
+PYTHONPATH=src python scripts/test_live_pipeline.py --limit 3 --workers 1
+```
+
+This uses real Semantic Scholar search, linked PDFs (with explicit abstract
+fallback), sentence-transformer embeddings, persisted vector storage, retrieval,
+and Ollama verification. Override `--query`, `--claim`, `--top-k`, or `--output`
+as needed. The output directory must be new to preserve previous runs.
+
+Each run creates `outputs/logs/live-<timestamp>/` containing:
+
+- `pipeline.log`: console output, progress, errors, and the final assessment.
+- `trace.jsonl`: timestamped stage events and durations, retrieved evidence,
+  graph node outputs, and LLM prompts/responses with call IDs.
+- `ingestion_report.json`: PDF availability and abstract fallback details.
+- `vector_store/`: saved embeddings and chunk metadata.
+- `result.json`: the final structured assessment, when produced.
+
+Tracing stays local and requires no LangSmith key. Environment secret values
+are redacted from console and trace records. A failed stage, failed paper
+analysis, or missing cited evidence returns a nonzero exit status; partial
+results remain available for debugging. This is an opt-in live integration
+check, separate from the deterministic pytest suite.
+
+Ollama uses a 16,384-token context window by default for paper evidence; set
+`OLLAMA_NUM_CTX` to override it and `OLLAMA_TIMEOUT` to adjust request timeouts.
+
+To send this live run to Langfuse as well, install the optional integration:
+
+```bash
+python -m pip install -e '.[tracing]'
+PYTHONPATH=src python scripts/test_live_pipeline.py --langfuse
+```
+
+The `--langfuse` option loads the project `.env` without overriding existing
+shell variables. Set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and
+`LANGFUSE_BASE_URL` there, and supply `SEMANTIC_SCHOLAR_API_KEY` in `.env` or
+your shell. The run checks Langfuse authentication, uploads pipeline stage
+spans plus graph and LLM observations, and flushes queued events before exit.
+Evidence, prompts, and model responses are sent to your Langfuse project;
+environment credential values are masked. Local artifacts remain available,
+including `langfuse_trace.txt` with the dashboard URL. Without `--langfuse`,
+this runner keeps its existing local-only tracing behavior. This flag applies
+to the live test runner, not automatically to the UI or other CLI commands.
+
+### Compact final assessment and response time
+
+The live runner and the `verify` / `rag-verify` CLI commands now write exactly
+six public fields to the requested result JSON:
+
+- `verdict`: Supports, Contradicts, Mixed, or Insufficient Evidence.
+- `confidence`: Low, Moderate, or High.
+- `evidence_summary`: one paragraph of 2–3 sentences synthesizing all individual analyses.
+- `key_findings`: 2–3 concise, cited scientific findings (citations retained internally).
+- `limitations`: 2–3 consolidated reasons for uncertainty.
+- `sources`: paper titles and URLs, deduplicated by paper ID.
+
+With no validated findings, the result is Insufficient Evidence with an empty
+findings/source list; the system does not fabricate results to fill the format.
+Missing source URLs remain null unless a DOI is available to construct a link.
+
+For `result.json`, detailed evidence and analyses are saved separately in
+`result.diagnostics.json`. Measured elapsed time is printed after the response
+and saved in `result.timing.json` as `claim_to_response_seconds`. The live
+runner measures from claim acceptance through final response generation,
+including discovery, PDF processing, embedding, retrieval, analysis and
+aggregation; separately prebuilt indexes are not counted by `rag-verify`.
+Final artifact writes and trace-upload flushing are excluded. Langfuse and
+local stage traces continue to retain detailed diagnostics.
+
+The Python `verify_claim` function returns an internal `FinalAssessment`;
+call `public_result()` for the compact six-field dictionary. The standalone
+Gradio starter UI still uses its own mock pipeline and is not connected to this
+verification backend.
+
+### Run a file of claims
+
+```bash
+PYTHONPATH=src python scripts/run_claim_tests.py --claims scripts/claims.txt --limit 20 --workers 1 --top-k 6 --langfuse
+```
+
+Each nonblank line is tested independently. By default its text is also used as
+the API search query; `--queries` accepts one quoted topical search query per
+claim. Runs execute sequentially, continue after individual failures, and save
+an incremental `summary.json` plus per-claim results and console logs under
+`outputs/logs/claims-<timestamp>/`.
+
+Each claim's `metrics.json` and `pipeline.log` report the configured paper limit,
+actual papers fetched, papers supplying evidence, total chunks indexed, chunks
+retrieved, chunks retained for analysis, configured worker count, effective
+worker limit, failed paper analyses, and elapsed time. `claim_to_response_seconds`
+is recorded when a response exists; `elapsed_seconds` also records failed runs.
+`process_seconds` in the batch summary additionally includes process startup and
+trace flushing. A paper limit is an upper bound, not a guarantee that enough
+papers or usable full texts exist.
+
+### Context and citation safeguards
+
+Analysis now defaults to at most **6 chunks total**, **3 chunks per paper**, and
+**8,000 text characters per paper**. Configure these independently of API paper
+count and retrieval `--top-k` using `--max-total-chunks`,
+`--max-chunks-per-paper`, and `--max-chars-per-paper` on the live/batch runners
+or verification CLI. Full ingested documents remain stored; selection omissions
+are recorded in diagnostic limitations.
+
+Before an LLM request, a conservative UTF-8-byte-based token estimate includes
+messages, JSON schema, and a chat-template allowance. Up to 2,048 tokens are
+reserved for the response, with the same generation cap on the default Ollama
+client. This is an intentionally conservative estimate rather than the model's
+exact tokenizer. Oversized per-paper requests drop lower-ranked whole chunks;
+aggregation first omits optional quality details, then reduces findings per
+paper while retaining every paper's stance and limitations. A request that
+still does not fit fails locally with a context-budget error rather than being
+sent over the configured limit. The default context remains 16,384 tokens.
+
+The aggregator receives validated paper findings and compact citation mappings,
+not full source excerpts or repeated prose explanations. Full evidence stays in
+diagnostics. Final finding `citation_ids` are required and nonempty, and the
+structured-output schema restricts each ID to the current request's permitted
+IDs. Python still validates the response and supplies specific validation errors
+on retry. Public `sources` includes only papers cited by final key findings,
+listed once each; uncited sources remain available in diagnostic files.
+
+### Faster verification without paper caching
+
+The default retrieval and analysis cap is now **4 chunks total** (up to 3 per
+paper). Override `--top-k` and `--max-total-chunks` to use more evidence. The API
+paper limit remains 20 in the live runner. Fewer retrieved chunks may change
+which papers contribute and therefore change the conclusion.
+
+Paper analyses now use one short explanation, at most 3 concise findings,
+0–2 essential limitations, and at most one additional quality note. Structured
+output bounds enforce these limits. The live runner loads the embedding model
+once and passes that same instance to ingestion and retrieval; this does not
+reuse papers, chunks, or embeddings across claims/runs. Existing vector-store
+artifacts remain available for inspection, but live runs still fetch and ingest
+fresh evidence.
+
+`scripts/benchmark_workers.py --output <new-directory>` compares 1 and 2 workers
+on fresh 20-paper coffee and vitamin-D searches, with the trial order reversed
+for the second claim. It records total and verification times, generated token
+counts, verdicts, and hashes of the retrieved evidence. Langfuse credentials and
+Semantic Scholar access are required. Ollama must be started with
+`OLLAMA_NUM_PARALLEL=2` to process two requests concurrently; setting `--workers 2`
+only changes the Python pool and cannot reconfigure an already-running server.
+
+The measured two-claim benchmark found no consistent benefit from 2 workers
+(mean total 54.5 s versus 54.4 s with 1 worker). The default remains **1 worker**
+across the live runner, CLI, and graph; `--workers 2` is available when useful on
+your hardware with Ollama parallel serving enabled. The existing Ollama service
+was not reconfigured. See `outputs/logs/speed-benchmark-20261019-1/report.md` for
+trial results and limitations.

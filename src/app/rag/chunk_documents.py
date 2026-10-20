@@ -1,5 +1,7 @@
 """Split documents into chunks for embedding."""
 from dataclasses import dataclass
+import re
+from app.rag.extract_documents import DocumentPage
 
 
 @dataclass
@@ -11,6 +13,31 @@ class TextChunk:
     page_number: int | None = None
     start_char: int = 0
     end_char: int = 0
+    paragraph_number: int | None = None
+
+
+def chunk_pages(pages: list[DocumentPage], source: str,
+                strategy: str = "paragraph") -> list[TextChunk]:
+    """One paragraph per chunk (or one page), never crossing page boundaries.
+
+    Paragraph numbering restarts on each page. No character limits or overlap.
+    A page without detected blank lines is one paragraph.
+    """
+    if strategy not in {"paragraph", "page"}:
+        raise ValueError("strategy must be 'paragraph' or 'page'")
+    chunks = []
+    for page in pages:
+        if page.page_number < 1:
+            raise ValueError("Page numbers must be positive")
+        parts = re.split(r"\n\s*\n", page.text.strip()) if strategy == "paragraph" else [page.text.strip()]
+        parts = [part.strip() for part in parts if part.strip()]
+        for number, text in enumerate(parts, start=1):
+            suffix = f":paragraph_{number}" if strategy == "paragraph" else ""
+            chunks.append(TextChunk(text=text,
+                chunk_id=f"{source}:page_{page.page_number}{suffix}", source=source,
+                page_number=page.page_number,
+                paragraph_number=number if strategy == "paragraph" else None))
+    return chunks
 
 
 def chunk_text(text: str, source: str, chunk_size: int = 1000, overlap: int = 100) -> list[TextChunk]:

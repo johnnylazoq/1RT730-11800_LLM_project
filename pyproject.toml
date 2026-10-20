@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 ui = ["gradio>=4.44.1,<6"]
 test = ["pytest>=8,<10"]
+tracing = ["langfuse>=4.18,<5", "langchain>=1,<2", "python-dotenv>=1,<2"]
 
 [project.scripts]
 claim-demo = "app.demo:main"

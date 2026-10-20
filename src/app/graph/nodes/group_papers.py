@@ -3,9 +3,9 @@ from app.llm.schemas import EvidenceChunk, RetrievedChunk, ScientificPaper
 
 
 def group_chunks(records: list[RetrievedChunk], *, higher_score_better: bool = True,
-                 max_papers: int = 10, max_chunks_per_paper: int = 8,
-                 max_chars_per_paper: int = 24000) -> tuple[list[ScientificPaper], list[str]]:
-    if min(max_papers, max_chunks_per_paper, max_chars_per_paper) < 1:
+                 max_papers: int = 10, max_chunks_per_paper: int = 3,
+                 max_chars_per_paper: int = 8000, max_total_chunks: int = 4) -> tuple[list[ScientificPaper], list[str]]:
+    if min(max_papers, max_chunks_per_paper, max_chars_per_paper, max_total_chunks) < 1:
         raise ValueError("Evidence limits must be positive")
     papers: dict[str, ScientificPaper] = {}
     seen: dict[tuple[str, str], RetrievedChunk] = {}
@@ -41,13 +41,15 @@ def group_chunks(records: list[RetrievedChunk], *, higher_score_better: bool = T
     if len(ordered) > max_papers:
         notes.append(f"Paper limit omitted {len(ordered) - max_papers} retrieved papers.")
     selected = []
+    total_kept = 0
     for paper in ordered[:max_papers]:
         kept = []
         used = 0
         for chunk in paper.chunks:
-            if len(kept) < max_chunks_per_paper and used + len(chunk.text) <= max_chars_per_paper:
+            if total_kept < max_total_chunks and len(kept) < max_chunks_per_paper and used + len(chunk.text) <= max_chars_per_paper:
                 kept.append(chunk)
                 used += len(chunk.text)
+                total_kept += 1
         if len(kept) != len(paper.chunks):
             notes.append(f"Evidence limits omitted {len(paper.chunks) - len(kept)} chunks from {paper.paper_id}.")
         selected.append(paper.model_copy(update={"chunks": kept}))

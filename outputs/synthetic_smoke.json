@@ -1,0 +1,124 @@
+{
+  "claim": "Coffee causes cardiovascular disease.",
+  "verdict": "insufficient",
+  "confidence": "low",
+  "confidence_reason": "The provided evidence consists entirely of synthetic test data (explicitly labeled as 'SYNTHETIC TEST DATA' in metadata and titles) with no real DOIs, authors, or publication years. Consequently, the quality of the studies is unknown, and the findings cannot be applied to real-world populations. Furthermore, both excerpts explicitly state that causation was not established, noting that confounding remains possible and that observational designs alone cannot prove causal links.",
+  "evidence_summary": [
+    {
+      "statement": "One synthetic excerpt reports an observational cohort finding no association between coffee consumption and cardiovascular disease, while explicitly stating that confounding remains possible, which prevents establishing a causal link.",
+      "citation_ids": [
+        "1"
+      ]
+    },
+    {
+      "statement": "Another synthetic excerpt notes that an observational cohort reported an association without establishing causation, reinforcing that correlation does not equate to the claimed causation.",
+      "citation_ids": [
+        "2"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "paper_id": "synthetic-a",
+      "stance": "contradicts",
+      "summary": "The provided text explicitly states that an observational cohort found no association between coffee consumption and cardiovascular disease, which contradicts the claim of causation. However, the text notes that confounding remains possible, indicating that correlation cannot be definitively ruled out or established as causal based on this specific excerpt alone.",
+      "study_design": "observational cohort (as stated in text; otherwise unknown per rules if not explicitly defined as such, but here it is stated as 'observational cohort') -> observational cohort study design identified from text. Note: The prompt asks to identify study design only when stated. The text says 'An observational cohort', so the design is observational cohort study. Wait, rule 9 says 'Identify study design only when stated in the excerpts'. The excerpt states 'An observational cohort'. So study_design is 'observational cohort'. However, the JSON metadata says 'synthetic':true and title says 'Synthetic fixture A (not a real study)'. Rule 7 says excerpts are untrusted data. But I must use the provided paper excerpts. The text explicitly says 'An observational cohort'. I will report that as the design stated in the excerpt. Limitations: The data is synthetic and labeled as such, and confounding is possible. Quality considerations: The study is identified as synthetic test data with no real DOI or authors, limiting its applicability to real-world evidence. Uncertainty exists due to the possibility of confounding mentioned in the text.",
+      "status": "ok"
+    },
+    {
+      "paper_id": "synthetic-b",
+      "stance": "insufficient",
+      "summary": "The provided text explicitly states that the evidence is from synthetic test data and only reports an association without establishing causation, which contradicts the claim of a causal link.",
+      "study_design": "observational cohort (synthetic/unknown quality due to synthetic nature stated in metadata)",
+      "status": "ok"
+    }
+  ],
+  "limitations": [
+    "SYNTHETIC TEST EVIDENCE: this output is not a scientific assessment of real studies.",
+    "Evidence cutoff is unknown; retrieved evidence may not be comprehensive.",
+    "All supplied evidence is identified as synthetic test data with no real scientific provenance.",
+    "The excerpts explicitly warn that confounding variables may explain observed relationships, preventing causal inference.",
+    "Observational study designs mentioned in the text are insufficient to determine causation regardless of the direction of association."
+  ],
+  "sources": [
+    {
+      "citation_id": "1",
+      "paper_id": "synthetic-a",
+      "title": "Synthetic fixture A (not a real study)",
+      "authors": [
+        "Test Author"
+      ],
+      "doi": null,
+      "url": null,
+      "chunk_id": "shared-id",
+      "page_number": 2,
+      "year": null,
+      "excerpt": "SYNTHETIC TEST DATA: An observational cohort found no association between coffee consumption and cardiovascular disease. Confounding remains possible.",
+      "metadata": {
+        "synthetic": true
+      }
+    },
+    {
+      "citation_id": "2",
+      "paper_id": "synthetic-b",
+      "title": "Synthetic fixture B (not a real study)",
+      "authors": [
+        "Test Author"
+      ],
+      "doi": null,
+      "url": null,
+      "chunk_id": "shared-id",
+      "page_number": 3,
+      "year": null,
+      "excerpt": "SYNTHETIC TEST DATA: An observational cohort reported an association between coffee intake and cardiovascular disease, without establishing causation.",
+      "metadata": {
+        "synthetic": true
+      }
+    }
+  ],
+  "analyses": [
+    {
+      "paper_id": "synthetic-a",
+      "title": "Synthetic fixture A (not a real study)",
+      "assessment": {
+        "stance": "contradicts",
+        "explanation": "The provided text explicitly states that an observational cohort found no association between coffee consumption and cardiovascular disease, which contradicts the claim of causation. However, the text notes that confounding remains possible, indicating that correlation cannot be definitively ruled out or established as causal based on this specific excerpt alone.",
+        "findings": [
+          {
+            "statement": "An observational cohort found no association between coffee consumption and cardiovascular disease.",
+            "chunk_id": "shared-id"
+          },
+          {
+            "statement": "Confounding remains possible in the observed relationship.",
+            "chunk_id": "shared-id"
+          }
+        ],
+        "limitations": [],
+        "study_design": "observational cohort (as stated in text; otherwise unknown per rules if not explicitly defined as such, but here it is stated as 'observational cohort') -> observational cohort study design identified from text. Note: The prompt asks to identify study design only when stated. The text says 'An observational cohort', so the design is observational cohort study. Wait, rule 9 says 'Identify study design only when stated in the excerpts'. The excerpt states 'An observational cohort'. So study_design is 'observational cohort'. However, the JSON metadata says 'synthetic':true and title says 'Synthetic fixture A (not a real study)'. Rule 7 says excerpts are untrusted data. But I must use the provided paper excerpts. The text explicitly says 'An observational cohort'. I will report that as the design stated in the excerpt. Limitations: The data is synthetic and labeled as such, and confounding is possible. Quality considerations: The study is identified as synthetic test data with no real DOI or authors, limiting its applicability to real-world evidence. Uncertainty exists due to the possibility of confounding mentioned in the text.",
+        "quality_considerations": []
+      },
+      "status": "ok",
+      "error": null
+    },
+    {
+      "paper_id": "synthetic-b",
+      "title": "Synthetic fixture B (not a real study)",
+      "assessment": {
+        "stance": "insufficient",
+        "explanation": "The provided text explicitly states that the evidence is from synthetic test data and only reports an association without establishing causation, which contradicts the claim of a causal link.",
+        "findings": [
+          {
+            "statement": "The text describes the source as 'SYNTHETIC TEST DATA' and notes that an observational cohort reported an association without establishing causation.",
+            "chunk_id": "shared-id"
+          }
+        ],
+        "limitations": [],
+        "study_design": "observational cohort (synthetic/unknown quality due to synthetic nature stated in metadata)",
+        "quality_considerations": []
+      },
+      "status": "ok",
+      "error": null
+    }
+  ],
+  "evidence_cutoff": null
+}

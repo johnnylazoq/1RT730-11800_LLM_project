@@ -2,6 +2,8 @@
 import argparse
 import json
 import os
+from time import perf_counter
+from app.reporting import write_response
 from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -59,28 +61,36 @@ def main():
     verify.add_argument("--input", required=True)
     verify.add_argument("--output", required=True)
     verify.add_argument("--format", choices=["abstracts", "chunks"], default="abstracts")
-    verify.add_argument("--workers", type=int, default=3)
+    verify.add_argument("--workers", type=int, default=1)
     
     # RAG ingest commands
     ingest_api = commands.add_parser("ingest-api")
     ingest_api.add_argument("--query", required=True, help="Search query for papers")
     ingest_api.add_argument("--output", default="vector_db", help="Vector store output directory")
     ingest_api.add_argument("--limit", type=int, default=10, help="Max papers to fetch")
+    ingest_api.add_argument("--strategy", choices=["paragraph", "page"], default="paragraph")
+    ingest_api.add_argument("--full-text-only", action="store_true", help="Skip abstract fallback")
     
     ingest_pdf_cmd = commands.add_parser("ingest-pdf")
     ingest_pdf_cmd.add_argument("--input", required=True, help="Directory containing PDFs")
     ingest_pdf_cmd.add_argument("--output", default="vector_db", help="Vector store output directory")
-    ingest_pdf_cmd.add_argument("--strategy", choices=["paragraph", "fixed"], default="paragraph")
+    ingest_pdf_cmd.add_argument("--strategy", choices=["paragraph", "page"], default="paragraph")
     
     # RAG retrieval + verification
     rag_verify = commands.add_parser("rag-verify")
     rag_verify.add_argument("--claim", required=True, help="Claim to verify")
     rag_verify.add_argument("--vector-store", default="vector_db", help="Path to vector store")
     rag_verify.add_argument("--output", required=True, help="Output file for results")
-    rag_verify.add_argument("--workers", type=int, default=3)
-    rag_verify.add_argument("--top-k", type=int, default=10, help="Number of chunks to retrieve")
+    rag_verify.add_argument("--workers", type=int, default=1)
+    rag_verify.add_argument("--top-k", type=int, default=4, help="Number of chunks to retrieve")
     
+    for command in (verify, rag_verify):
+        command.add_argument('--max-chunks-per-paper', type=int, default=3)
+        command.add_argument('--max-total-chunks', type=int, default=4)
+        command.add_argument('--max-chars-per-paper', type=int, default=8000)
+
     args = parser.parse_args()
+    started_at = perf_counter()
     
     if args.command == "fetch":
         fetch_once(args.query, args.output)
@@ -89,15 +99,19 @@ def main():
     elif args.command == "verify":
         payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
         chunks = abstract_chunks(payload) if args.format == "abstracts" else payload
-        result = verify_claim(args.claim, chunks, max_workers=args.workers)
-        Path(args.output).write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        result = verify_claim(args.claim, chunks, max_workers=args.workers,
+            max_chunks_per_paper=args.max_chunks_per_paper, max_total_chunks=args.max_total_chunks,
+            max_chars_per_paper=args.max_chars_per_paper)
+        write_response(result, args.output, started_at)
         print(f"Saved to {args.output}")
     
     elif args.command == "ingest-api":
         ingest_papers_from_api(
             query=args.query,
             vector_store_path=args.output,
-            limit=args.limit
+            limit=args.limit,
+            chunk_strategy=args.strategy,
+            abstract_fallback=not args.full_text_only
         )
         print(f"Vector store created at {args.output}")
     
@@ -113,20 +127,12 @@ def main():
         retriever = create_retriever(args.vector_store)
         chunks = retriever.retrieve(args.claim, k=args.top_k)
         
-        if not chunks:
-            print(f"No relevant chunks found for: {args.claim}")
-            result = None
-        else:
-            print(f"Retrieved {len(chunks)} relevant chunks")
-            result = verify_claim(args.claim, chunks, max_workers=args.workers)
-        
-        output_data = {
-            "claim": args.claim,
-            "result": result.model_dump() if result else None,
-            "retrieved_chunks_count": len(chunks)
-        }
-        Path(args.output).write_text(json.dumps(output_data, indent=2), encoding="utf-8")
+        result = verify_claim(args.claim, chunks, max_workers=args.workers,
+            max_chunks_per_paper=args.max_chunks_per_paper, max_total_chunks=args.max_total_chunks,
+            max_chars_per_paper=args.max_chars_per_paper)
+        write_response(result, args.output, started_at)
         print(f"Saved to {args.output}")
+
 
 
 if __name__ == "__main__":

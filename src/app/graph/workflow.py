@@ -1,5 +1,6 @@
 """LangGraph workflow for claim verification."""
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from langgraph.graph import StateGraph, START, END
 from app.graph.state import GraphState
 from app.graph.nodes.group_papers import group_chunks
@@ -9,7 +10,7 @@ from app.graph.nodes.rag import retrieve_evidence
 from app.llm.schemas import RetrievedChunk, PaperAnalysis, PaperAssessment
 
 
-def build_graph(*, llm=None, max_workers=3, retries=1, retriever=None, **group_options):
+def build_graph(*, llm=None, max_workers=1, retries=1, retriever=None, **group_options):
     """Build LangGraph workflow for claim verification.
     
     Args:
@@ -44,15 +45,19 @@ def build_graph(*, llm=None, max_workers=3, retries=1, retriever=None, **group_o
                 error=error, assessment=PaperAssessment(stance="insufficient",
                     explanation="Paper could not be analyzed due to a processing failure."))
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            return {"analyses": list(pool.map(run, state["papers"]))}
+            # Preserve graph callbacks and tracing parents in each worker.
+            futures = [pool.submit(copy_context().run, run, paper) for paper in state["papers"]]
+            return {"analyses": [future.result() for future in futures]}
 
     def aggregate(state):
+        feedback = None
         for attempt in range(retries + 1):
             try:
                 return {"final": aggregate_evidence(state["claim"], state["papers"],
                     state["analyses"], limitations=state["limitations"],
-                    evidence_cutoff=state.get("evidence_cutoff"), llm=llm)}
-            except Exception:
+                    evidence_cutoff=state.get("evidence_cutoff"), llm=llm, retry_feedback=feedback)}
+            except Exception as exc:
+                feedback = str(exc)
                 if attempt == retries:
                     raise
 
